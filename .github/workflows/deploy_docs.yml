@@ -23,9 +23,9 @@ jobs:
           pip install mkdocs mkdocstrings[python] mkdocs-material
 
       - name: Build documentation
-        run: |
-          PYTHONPATH=${{ github.workspace }}
-          mkdocs build -f config/mkdocs.yml --clean
+        env:
+          PYTHONPATH: ${{ github.workspace }}  # Define PYTHONPATH para a raiz do projeto
+        run: mkdocs build -f config/mkdocs.yml --clean
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
