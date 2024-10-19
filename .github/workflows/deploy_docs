@@ -1,0 +1,34 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main  # ou main, dependendo do seu repositório
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.10'  # Ou a versão do Python que você estiver usando
+
+      - name: Install MkDocs and dependencies
+        run: |
+          pip install mkdocs mkdocstrings[python] mkdocs-material
+
+      - name: Build documentation
+        env: PYTHONPATH: ${{ github.workspace }}
+        run: mkdocs build -f config/mkdocs.yml --clean
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
