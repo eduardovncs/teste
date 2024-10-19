@@ -1,0 +1,9 @@
+tox
+black
+radon
+pytest
+pylint
+bandit
+mkdocs
+mkdocstrings[python]
+mkdocs-material

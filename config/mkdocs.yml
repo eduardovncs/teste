@@ -1,0 +1,13 @@
+site_name: Teste
+nav:
+  - Home: index.md
+
+# A saída gerada será na pasta docs na raiz do projeto
+docs_dir: ../docs  # Isso direciona a saída para a pasta docs na raiz
+
+theme:
+  name: "material"
+
+plugins:
+  - mkdocstrings:
+      default: python
