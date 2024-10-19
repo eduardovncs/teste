@@ -24,7 +24,7 @@ jobs:
 
       - name: Build documentation
         run: |
-          PYTHONPATH="${PYTHONPATH}:${{ github.workspace }}"
+          PYTHONPATH=${{ github.workspace }}
           mkdocs build -f config/mkdocs.yml --clean
 
       - name: Deploy to GitHub Pages
