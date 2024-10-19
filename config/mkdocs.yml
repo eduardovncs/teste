@@ -4,6 +4,7 @@ nav:
 
 # A saída gerada será na pasta docs na raiz do projeto
 docs_dir: ../docs  # Isso direciona a saída para a pasta docs na raiz
+site_dir: ../site
 
 theme:
   name: "material"
