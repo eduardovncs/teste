@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src", "jobs"]
+
+[project]
+name = "Teste"
+
+version = "0.0.1"
+description = "Projeto Databricks com UV stack"
+requires-python = "==3.12.3"
+dependencies = []
+
+# --- Grupos de Dependências (Dev) ---
+[dependency-groups]
+dev = [
+    "databricks-connect==15.4.*",
+    "pyspark==3.5.*",
+    "delta-spark>=3.0.0",
+    "ruff",
+    "ty",
+    "pydoclint",
+    "mkdocs",
+    "mkdocs-material",
+    "mkdocstrings[python]",
+    "mkdocs-mermaid2-plugin",
+    "taskipy",
+    "xenon",
+    "radon",
+    "rich",
+    "python-dotenv>=1.2.1",
+    "bandit>=1.9.3",
+]
+
+
+# --- Configuração do Ruff (Lint e Format) ---
+[tool.ruff]
+line-length = 90
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["S", "INP001", "D100", "COM812", "D203", "D212", "D200"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+
+# --- Configuração do Pyright ---
+[tool.ty.environment]
+# Multiple directories (priority order)
+root = ["src/", "jobs/"]
+
+
+# --- Configuração do Pydoclint ---
+[tool.pydoclint]
+style = "google"
+exclude = "tests"
+check-yields = true
+check-arg-order = true
+check-return-types = true
+arg-type-hints-in-docstring = false
+skip-checking-short-docstrings = false
+allow-init-docstring = true
+check-style-mismatch = true
+require-return-section-when-returning-nothing = false
+
+# --- Configuração do Taskipy (Tarefas) ---
+[tool.taskipy.variables]
+code_paths = "jobs/ src/"
+
+[tool.taskipy.tasks]
+lint = { cmd = 'uv run ruff check {code_paths}', use_vars = true }
+doclint = { cmd = 'uv run pydoclint {code_paths}', use_vars = true }
+typing = { cmd = 'uv run ty check {code_paths}', use_vars = true }
+complexity = { cmd = 'uv run xenon --max-absolute A --max-modules A --max-average A {code_paths}', use_vars = true }
+radon = { cmd = 'uv run python scripts/dev/exec_audit.py', use_vars = true }
+docs = { cmd = 'uv run mkdocs serve', use_vars = true }
+docs-check = { cmd = 'uv run mkdocs build --strict', use_vars = true }
+check = "task lint && task doclint && task typing && task complexity && task docs-check"
+databricks = "python c:\\Users\\dnzk\\.vscode\\extensions\\databricks.databricks-2.10.5-win32-x64\\resources\\python\\dbconnect-bootstrap.py"
