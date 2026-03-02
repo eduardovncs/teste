@@ -1,0 +1,299 @@
+"""
+MCP Databricks Key Finder.
+
+Ferramentas para análise de chaves únicas em tabelas Databricks.
+"""
+import time
+from typing import Any
+
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.catalog import TableInfo
+from databricks.sdk.service.sql import StatementState
+from fastmcp import FastMCP
+
+# ============================================================
+# CONFIGURAÇÃO
+# ============================================================
+
+WAREHOUSE_ID = "473282f27b463fe4"
+POLL_INTERVAL = 1
+MAX_SAMPLES = 5
+
+
+# ============================================================
+# CLIENTE DATABRICKS
+# ============================================================
+
+
+class DatabricksClient:
+    """Cliente para interagir com Databricks (metadados e queries SQL)."""
+
+    def __init__(self, warehouse_id: str = WAREHOUSE_ID):
+        self.client = WorkspaceClient()
+        self.warehouse_id = warehouse_id
+
+    def execute_sql(self, statement: str) -> list[list[Any]]:
+        """Executa SQL e retorna resultado."""
+        response = self.client.statement_execution.execute_statement(
+            warehouse_id=self.warehouse_id,
+            statement=statement,
+        )
+
+        # Polling até completar
+        statement_id = response.statement_id
+        while True:
+            response = self.client.statement_execution.get_statement(statement_id)
+            state = response.status.state
+
+            if state in (StatementState.SUCCEEDED, StatementState.FAILED, StatementState.CANCELED):
+                break
+            time.sleep(POLL_INTERVAL)
+
+        if state != StatementState.SUCCEEDED:
+            raise RuntimeError(f"Query falhou: {response.status.error}")
+
+        return response.result.data_array or []
+
+    def get_table_info(self, table_name: str) -> TableInfo:
+        """Obtém informações da tabela do catálogo."""
+        return self.client.tables.get(table_name)
+
+
+# ============================================================
+# QUERIES
+# ============================================================
+
+
+class Queries:
+    """Queries SQL reutilizáveis."""
+
+    @staticmethod
+    def count_rows(table: str) -> str:
+        return f"SELECT COUNT(*) FROM {table}"
+
+    @staticmethod
+    def describe_table(table: str) -> str:
+        return f"DESCRIBE TABLE {table}"
+
+    @staticmethod
+    def analyze_columns(table: str, columns: list[str]) -> str:
+        """Query para calcular distinct e nulls de todas colunas em 1 scan."""
+        agg_exprs = ", ".join([
+            f"COUNT(DISTINCT {col}) AS distinct_{col}, "
+            f"SUM(CASE WHEN {col} IS NULL THEN 1 ELSE 0 END) AS nulls_{col}"
+            for col in columns
+        ])
+        return f"SELECT {agg_exprs} FROM {table}"
+
+    @staticmethod
+    def count_distinct(table: str, columns: list[str]) -> str:
+        """Conta valores distintos de uma combinação de colunas."""
+        cols = ", ".join(columns)
+        return f"SELECT COUNT(*) FROM (SELECT DISTINCT {cols} FROM {table})"
+
+    @staticmethod
+    def find_duplicates(table: str, columns: list[str], limit: int = MAX_SAMPLES) -> str:
+        """Encontra linhas duplicadas para uma combinação de colunas."""
+        cols = ", ".join(columns)
+        return f"""
+            SELECT {cols}, COUNT(*) AS occurrences
+            FROM {table}
+            GROUP BY {cols}
+            HAVING COUNT(*) > 1
+            ORDER BY occurrences DESC
+            LIMIT {limit}
+        """
+
+
+# ============================================================
+# MCP TOOLS
+# ============================================================
+
+mcp = FastMCP("databricks-key-finder")
+db = DatabricksClient()
+
+
+@mcp.tool()
+def get_table_metadata(table_full_name: str) -> dict:
+    """
+    Retorna metadados de uma tabela Databricks.
+
+    Use esta tool PRIMEIRO para entender o domínio de negócio antes de
+    analisar chaves. Os comentários das colunas são essenciais para
+    interpretar o significado dos dados.
+
+    Args:
+        table_full_name: Nome completo no formato catalog.schema.table
+                         Exemplo: workspace.default.tb_clientes
+
+    Returns:
+        {
+            "table": str,              # Nome completo da tabela
+            "description": str,        # Descrição/comentário da tabela
+            "columns": [
+                {
+                    "name": str,       # Nome da coluna
+                    "type": str,       # Tipo da coluna (string, bigint, decimal, etc)
+                    "description": str,# Descrição/comentário da coluna
+                }
+            ]
+        }
+    """
+    table = db.get_table_info(table_full_name)
+
+    return {
+        "table": table_full_name,
+        "description": table.comment or "Sem descrição.",
+        "columns": [
+            {
+                "name": col.name,
+                "type": col.type_text or str(col.type_name),
+                "description": col.comment or "Sem descrição."
+            }
+            for col in (table.columns or [])
+        ],
+    }
+
+
+@mcp.tool()
+def explorar_colunas(table_full_name: str) -> dict:
+    """
+    Analisa cardinalidade de todas as colunas da tabela.
+
+    Use esta tool para identificar candidatas a chave única. Colunas com
+    pct_distinct próximo de 1.0 (100%) e pct_nulls próximo de 0.0 (0%)
+    são boas candidatas.
+
+    IMPORTANTE: Resultados já vêm ORDENADOS por pct_distinct (maiores primeiro),
+    então as primeiras colunas da lista são as melhores candidatas.
+
+    Args:
+        table_full_name: Nome completo da tabela
+                         Exemplo: workspace.default.tb_clientes
+
+    Returns:
+        {
+            "table": str,        # Nome completo da tabela
+            "total_rows": int,   # Total de linhas (use para contexto)
+            "columns": [         # ORDENADAS por pct_distinct DESC
+                {
+                    "name": str,           # Nome da coluna
+                    "pct_distinct": float, # % de valores únicos (0.0 a 1.0)
+                                          # 1.0 = 100% únicos (perfeito)
+                                          # 0.5 = 50% únicos, 50% duplicados
+                    "pct_nulls": float     # % de valores nulos (0.0 a 1.0)
+                                          # 0.0 = sem nulos (bom para chave)
+                                          # 0.5 = 50% nulos (ruim para chave)
+                }
+            ]
+        }
+    """
+    # Total de linhas
+    total_rows = int(db.execute_sql(Queries.count_rows(table_full_name))[0][0])
+
+    # Colunas da tabela
+    cols_data = db.execute_sql(Queries.describe_table(table_full_name))
+    columns = [row[0] for row in cols_data if row[0] and not row[0].startswith("#")]
+
+    # Análise de todas colunas em 1 query
+    result = db.execute_sql(Queries.analyze_columns(table_full_name, columns))
+    row = result[0]
+
+    # Parsear resultados
+    column_stats = []
+    for i, col in enumerate(columns):
+        distinct = int(row[i * 2])
+        nulls = int(row[i * 2 + 1])
+
+        column_stats.append({
+            "name": col,
+            "pct_distinct": round(distinct / total_rows, 4) if total_rows > 0 else 0,
+            "pct_nulls": round(nulls / total_rows, 4) if total_rows > 0 else 0,
+        })
+
+    # Ordenar por % de distintos
+    column_stats.sort(key=lambda x: x["pct_distinct"], reverse=True)
+
+    return {
+        "table": table_full_name,
+        "total_rows": total_rows,
+        "columns": column_stats,
+    }
+
+
+@mcp.tool()
+def testar_chaves(table_full_name: str, combinacoes: list[list[str]]) -> list[dict]:
+    """
+    Testa se combinações de colunas formam chave única.
+
+    Para cada combinação testada:
+    - Se is_unique = true: é uma chave válida!
+    - Se is_unique = false: veja pct_distinct para saber quão próximo está
+      e analise duplicate_samples para decidir qual coluna adicionar
+
+    IMPORTANTE sobre duplicate_samples:
+    - Retorna os TOP 5 casos com MAIS ocorrências (não é amostra aleatória)
+    - Use para entender QUAIS valores estão duplicando
+
+    Args:
+        table_full_name: Nome completo da tabela
+                         Exemplo: workspace.default.tb_contratos
+
+        combinacoes: Lista de combinações a testar
+                     Exemplos:
+                     - [["cpf"]] → testa só cpf
+                     - [["cpf"], ["cpf", "produto"]] → testa cpf sozinho E cpf+produto
+
+    Returns:
+        Lista onde cada item é:
+        {
+            "columns": list[str],      # Colunas testadas nesta combinação
+            "is_unique": bool,         # true = é chave única, false = tem duplicatas
+            "pct_distinct": float,     # % de combinações únicas (0.0 a 1.0)
+                                       # 1.0 = 100% único (perfeito)
+                                       # 0.98 = 98% único, 2% duplicado
+            "duplicate_samples": [     # Possui valor apenas se is_unique = false
+                {                      # TOP 5 combinações com MAIS duplicatas
+                    "col1": valor,     # Valores das colunas testadas
+                    "col2": valor,
+                    "occurrences": int # Quantas vezes esta combinação aparece
+                                       # Ordenado DESC (mais duplicados primeiro)
+                }
+            ]
+        }
+    """
+    total_rows = int(db.execute_sql(Queries.count_rows(table_full_name))[0][0])
+
+    results = []
+    for combo in combinacoes:
+        # Conta distintos
+        distinct = int(db.execute_sql(Queries.count_distinct(table_full_name, combo))[0][0])
+
+        is_unique = (distinct == total_rows)
+
+        # Se não for única, busca amostra de duplicatas
+        duplicate_samples = []
+        if not is_unique:
+            dup_rows = db.execute_sql(Queries.find_duplicates(table_full_name, combo))
+
+            for row in dup_rows:
+                sample = {col: row[i] for i, col in enumerate(combo)}
+                sample["occurrences"] = int(row[len(combo)])
+                duplicate_samples.append(sample)
+
+        results.append({
+            "columns": combo,
+            "is_unique": is_unique,
+            "pct_distinct": round(distinct / total_rows, 4) if total_rows > 0 else 0,
+            "duplicate_samples": duplicate_samples,
+        })
+
+    return results
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")
