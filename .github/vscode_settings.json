@@ -1,0 +1,46 @@
+{
+    "kanban-markdown.showBuildWithAI": false,
+    "kanban-markdown.featuresDirectory": ".specs/tasks",
+    "kanban-markdown.columns": [
+        {
+            "id": "backlog",
+            "name": "Backlog",
+            "color": "#6b7280"
+        },
+        {
+            "id": "todo",
+            "name": "To Do",
+            "color": "#3b82f6"
+        },
+        {
+            "id": "in-progress",
+            "name": "Em progresso",
+            "color": "#f59e0b"
+        },
+        {
+            "id": "gatekeeper",
+            "name": "Gatekeeper",
+            "color": "#db2777"
+        },
+        {
+            "id": "review",
+            "name": "Revisão",
+            "color": "#8b5cf6"
+        },
+        {
+            "id": "done",
+            "name": "Finalizado",
+            "color": "#22c55e"
+        },
+        {
+            "id": "blocked",
+            "name": "Bloqueado",
+            "color": "#ef4444"
+        },
+        {
+            "id": "cancelled",
+            "name": "Cancelado",
+            "color": "#9ca3af"
+        }
+    ]
+}
